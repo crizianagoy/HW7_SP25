@@ -1,8 +1,9 @@
+
 import sys
 from PyQt5.QtWidgets import QWidget, QApplication
 from PyQt5.QtCore import pyqtSlot
 
-from Thermo2StateCalc import Ui_frmTwoStateCalculator
+from ThermoStateCalcHW import Ui_frmTwoStateCalculator
 from UnitConversion import UC
 
 from pyXSteam.XSteam import XSteam
@@ -12,6 +13,20 @@ from scipy.optimize import fsolve
 ###############################################################################
 #   HELPER CLASSES
 ###############################################################################
+"""
+Two-State Steam Calculator (Main App)
+-------------------------------------
+
+This module implements a PyQt5 GUI for calculating steam properties for two thermodynamic states.
+Users input two properties per state (e.g., Pressure & Temperature), and the system computes the
+remaining properties using pyXSteam.
+
+Features:
+- SI and English unit switching
+- Property difference calculation (Δ between state 1 and state 2)
+- Error handling and safety checks for out-of-range values
+- Dynamic GUI behavior using PyQt5
+"""
 
 class thermoState:
     """
@@ -20,8 +35,11 @@ class thermoState:
     We add some safety checks and debug prints to avoid out-of-range calls.
     """
     def __init__(self):
-        self.steamTable = XSteam(XSteam.UNIT_SYSTEM_MKS)
-        self.region = "saturated"
+        """
+               Initializes a new thermodynamic state object with all properties set to None.
+        """
+        self.steamTable = XSteam(XSteam.UNIT_SYSTEM_MKS) # Default to SI/MKS
+        self.region = "saturated"  # default assumption
         self.p = None
         self.t = None
         self.v = None
@@ -31,8 +49,14 @@ class thermoState:
         self.x = None
 
     def computeProperties(self):
+        """
+               Computes the remaining thermodynamic properties depending on the region type:
+               - For two-phase region: uses quality (x) to interpolate between saturated liquid and vapor.
+               - For single-phase (subcooled or superheated): uses p-t inputs directly.
+        """
         """Compute final properties from (p,t,region,x, etc.) after setState."""
         if self.region == "two-phase":
+            # Saturated liquid and vapor values
             uf = self.steamTable.uL_p(self.p)
             ug = self.steamTable.uV_p(self.p)
             hf = self.steamTable.hL_p(self.p)
@@ -42,6 +66,7 @@ class thermoState:
             vf = self.steamTable.vL_p(self.p)
             vg = self.steamTable.vV_p(self.p)
 
+            # Interpolation based on quality (x)
             self.u = uf + self.x * (ug - uf)
             self.h = hf + self.x * (hg - hf)
             self.s = sf + self.x * (sg - sf)
@@ -52,7 +77,7 @@ class thermoState:
             self.h = self.steamTable.h_pt(self.p, self.t)
             self.s = self.steamTable.s_pt(self.p, self.t)
             self.v = self.steamTable.v_pt(self.p, self.t)
-
+            # Set quality for reference (1.0 for vapor, 0.0 for liquid)
             if self.region == "super-heated vapor":
                 self.x = 1.0
             elif self.region == "sub-cooled liquid":
@@ -60,13 +85,19 @@ class thermoState:
 
     def setState(self, prop1, prop2, val1, val2, SI=True):
         """
-        Sets the thermodynamic state, given two property names (e.g., 'p','t')
-        and their numeric values in either SI or English units.
-        We do minimal checks for valid ranges to avoid XSteam crashes.
+        Sets the state using two independent properties (e.g., 'p' and 't').
+              Supported combinations: (p, t), (p, x)
+              Converts and validates the input values, then triggers property computation.
+
+        Parameters:
+            prop1, prop2 (str): Property names (e.g., 'p', 't', 'x', 'h', etc.)
+            val1, val2 (float): Corresponding values
+            SI (bool): Whether the values are in SI units
         """
         # Switch XSteam to correct units
         self.steamTable = XSteam(XSteam.UNIT_SYSTEM_MKS if SI else XSteam.UNIT_SYSTEM_FLS)
 
+        # Safety checks
         def checkPressure(pbar):
             if pbar <= 0.0:
                 raise ValueError(f"Invalid pressure {pbar:.3f} bar (must be > 0).")
@@ -79,12 +110,14 @@ class thermoState:
             if tC > 600.0:
                 raise ValueError(f"Temperature {tC:.2f} C above 600 might crash XSteam.")
 
+        # Debug logging
         print(f"[DEBUG] setState called with: {prop1}={val1}, {prop2}={val2}, SI={SI}")
 
+        # Normalize property strings
         prop1 = prop1.lower().strip()
         prop2 = prop2.lower().strip()
 
-        # ------------------- EXAMPLE: p–t or t–p -------------------
+        # EXAMPLE: p–t or t–p
         if ('p' in [prop1, prop2]) and ('t' in [prop1, prop2]):
             if prop1 == 'p':
                 self.p = val1
@@ -96,6 +129,7 @@ class thermoState:
             checkPressure(self.p)
             checkTemperature(self.t)
 
+            # Determine region
             tsat = self.steamTable.tsat_p(self.p)
             if abs(self.t - tsat) < 0.0001:
                 self.region = "two-phase"
@@ -118,7 +152,7 @@ class thermoState:
                 self.x = val1
 
             checkPressure(self.p)
-            # clamp x
+             # Clamp quality to [0, 1]
             if self.x < 0.0: self.x = 0.0
             if self.x > 1.0: self.x = 1.0
 
@@ -142,12 +176,12 @@ class thermoState:
 class main_window(QWidget, Ui_frmTwoStateCalculator):
     def __init__(self):
         super().__init__()
-        self.setupUi(self)
-        self.currentUnits = 'SI'  # track which system is active
-        self.setupSignals()
+        self.setupUi(self)  # Setup the GUI layout from UI file
+        self.currentUnits = 'SI'  # Initial units are SI
+        self.setupSignals()  # Connect GUI signals to slots
         self.show()
 
-        # These hold the "current labels" for each property in SI or English
+        # Unit label placeholders (dynamic display)
         self.pUnits = "bar"
         self.tUnits = "C"
         self.hUnits = "kJ/kg"
@@ -159,6 +193,10 @@ class main_window(QWidget, Ui_frmTwoStateCalculator):
         self.setUnits()
 
     def setupSignals(self):
+        """
+        Connects all GUI signals (button clicks, combo changes, etc.)
+                to their corresponding event handlers (slots).
+        """
         # Radio buttons
         self.rdoSI.clicked.connect(self.setUnits)
         self.rdoEnglish.clicked.connect(self.setUnits)
@@ -178,12 +216,20 @@ class main_window(QWidget, Ui_frmTwoStateCalculator):
         Update displayed units for property combos, and if user toggled from
         SI<->English, convert numeric QLineEdit values too.
         """
-        SI = self.rdoSI.isChecked()
-        newUnits = 'SI' if SI else 'EN'
-        unitChange = (newUnits != self.currentUnits)
-        self.currentUnits = newUnits
+        """
+            Handles unit system toggle (SI ↔ English).
+            Updates unit labels on the GUI and optionally converts the numeric input values
+            in QLineEdits between unit systems.
 
-        # Decide labels
+            If the user switches from SI to English or vice versa, all value fields are
+            automatically converted using proper conversion factors.
+        """
+        SI = self.rdoSI.isChecked()# True if SI selected, else English
+        newUnits = 'SI' if SI else 'EN'
+        unitChange = (newUnits != self.currentUnits)# Did the user toggle?
+        self.currentUnits = newUnits # Save the new current unit system
+
+        # # Define unit labels based on the selected unit system
         if SI:
             self.pUnits = "bar"
             self.tUnits = "C"
@@ -201,15 +247,22 @@ class main_window(QWidget, Ui_frmTwoStateCalculator):
 
         # helper to parse "Pressure (p)" -> "p"
         def shortProp(cmbText):
+            """
+             Extracts the short property name (e.g., 'p') from combo box text like "Pressure (p)".
+            """
             if '(' in cmbText and ')' in cmbText:
                 return cmbText[cmbText.index('(')+1 : cmbText.index(')')].lower()
             return ""
 
         # function to do numeric conversions
         def convertValue(val, propType, oldIsSI, newIsSI):
+            """
+                    Converts a numeric value from one unit system to another based on property type.
+            """
             if oldIsSI == newIsSI:
                 return val
             # oldIsSI=True => going from SI->English
+            # Convert based on property type
             if propType == 'p':
                 return val * UC.bar_to_psi if oldIsSI else val * UC.psi_to_bar
             elif propType == 't':
@@ -229,12 +282,17 @@ class main_window(QWidget, Ui_frmTwoStateCalculator):
         # For each property line (S1P1, S1P2, S2P1, S2P2)
         # a small function to handle them in one step
         def updateLineEdit(cmb, leVal, lblUnits):
+            """
+                For a given property combo box, value box, and unit label:
+                 - Convert the value if unit system changed
+                 - Update the label to show the appropriate unit
+            """
             propType = shortProp(cmb.currentText())
             val = float(leVal.text())
             if unitChange:
                 val = convertValue(val, propType, oldIsSI, SI)
 
-            # set label
+            # Update unit label
             if propType == 'p': lblUnits.setText(self.pUnits)
             elif propType == 't': lblUnits.setText(self.tUnits)
             elif propType == 'h': lblUnits.setText(self.hUnits)
@@ -245,11 +303,11 @@ class main_window(QWidget, Ui_frmTwoStateCalculator):
 
             leVal.setText(f"{val:.3f}")
 
-        # State 1
+        # Update inputs for State 1
         updateLineEdit(self.cmbProp1S1, self.lePropVal1S1, self.lblUnits1S1)
         updateLineEdit(self.cmbProp2S1, self.lePropVal2S1, self.lblUnits2S1)
 
-        # State 2
+        # Update inputs for State 2
         updateLineEdit(self.cmbProp1S2, self.lePropVal1S2, self.lblUnits1S2)
         updateLineEdit(self.cmbProp2S2, self.lePropVal2S2, self.lblUnits2S2)
 
@@ -261,6 +319,16 @@ class main_window(QWidget, Ui_frmTwoStateCalculator):
             Pressure = 1.000 (bar)
             Temperature = 100.000 (C)
             ...
+        """
+        """
+           Constructs a formatted string summarizing the full state of the given
+           thermoState object (used to display in the GUI).
+
+           Parameters:
+               st (thermoState): The state to describe
+
+           Returns:
+               str: A multiline string with property values and units.
         """
         lines = []
         lines.append(f"Region: {st.region}")
@@ -279,6 +347,17 @@ class main_window(QWidget, Ui_frmTwoStateCalculator):
             ΔPressure = 0.000 (bar)
             ΔTemperature = 100.000 (C)
             ...
+        """
+        """
+            Constructs a multiline string of differences between two states,
+            showing how properties changed from state 1 to state 2.
+
+            Parameters:
+                s1 (thermoState): State 1
+                s2 (thermoState): State 2
+
+            Returns:
+                str: A multiline string showing deltas with units.
         """
         dp = s2.p - s1.p
         dT = s2.t - s1.t
@@ -300,6 +379,14 @@ class main_window(QWidget, Ui_frmTwoStateCalculator):
 
     @pyqtSlot()
     def calculateProperties(self):
+        """
+            Main calculation method called when the "Calculate" button is clicked.
+            It:
+            - Extracts user-selected properties and their values for both states.
+            - Validates input (e.g., no duplicate properties).
+            - Calls setState() for each thermoState object.
+            - Displays results and differences.
+        """
         self.lblWarning.setText("")  # clear any old warning
 
         def shortProp(cmbText):
@@ -328,14 +415,16 @@ class main_window(QWidget, Ui_frmTwoStateCalculator):
             return
 
         # Create two states
-        SI = (self.currentUnits == 'SI')
+        SI = (self.currentUnits == 'SI') # Check unit system
         s1 = thermoState()
         s2 = thermoState()
 
         try:
+            # Try computing state 1 and 2
             s1.setState(sp1S1, sp2S1, val1S1, val2S1, SI)
             s2.setState(sp1S2, sp2S2, val1S2, val2S2, SI)
 
+            # Display computed properties
             label1 = self.makeLabel(s1)
             label2 = self.makeLabel(s2)
             labelDelta = self.makeDeltaLabel(s1, s2)
